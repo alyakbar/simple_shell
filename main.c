@@ -1,188 +1,202 @@
-#include <stdio.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/wait.h>
-#include <fcntl.h>
+#include "shell.h"
 
-#define MAXLINE 80
+/**
+ * main - Prints the prompt and calls the functions needed to run the shell.
+ * @ac: argument counter
+ * @av: argument vector
+ * Return: Always 0.
+ */
 
+int main(__attribute__((unused)) int ac, char **av)
+{
+	char *line = NULL;
+	size_t len = 0;
+	int i = 1, count = 0;
 
-void freeArgs(char *args[],int argv) {
-    int i = 0;
-    while(args[i] != NULL && (i < argv)) {
-        free(args[i]);
-        i++;
-        if (i == 80) break;
-    }
+	while (i != -1)
+	{
+		count++;
+		signal(SIGINT, signal_handler);
+		if (isatty(STDIN_FILENO) == 1)
+			write(STDOUT_FILENO, "$ ", 2);
+		i = getline(&line, &len, stdin);
+		if (i < 0)
+		{
+			free(line);
+			exit(0);
+		}
+		str_to_array(line, count, av);
+		free(line);
+		line = NULL;
+	}
+	return (0);
 }
 
-void readCommandFromUser(char *args[], int *hasAmp, int *argv) {
+/**
+ * str_to_array - Takes a string and turns it into a list of strings.
+ * @cmd_line: string.
+ * @count: line counter
+ * @argv: argument vector
+ * Return: A list of strings.
+ */
 
-    //khai bao
-    char userCommand[MAXLINE];
-    int length = 0;
-    char delimiter[] = " ";
+int str_to_array(char *cmd_line, int count, char **argv)
+{
+	char **token_array, *token, *tmp = 0, *exit = {"exit"}, *envi = {"env"};
+	int i = 0, j = 0, k = 0, l = 0, exit_status = 0;
 
-    // doc tu stdin
-    length = read(STDIN_FILENO, userCommand, 80);
-
-    // loai bo \n tu usrcmd
-    if (userCommand[length - 1] == '\n') {
-        userCommand[length - 1] = '\0';
-    }
-
-    // kiem tra neu la lenh history thi se thoat.
-    // lenh cu van duoc luu trong args
-    if (strcmp(userCommand, "!!") == 0) {
-        if (*argv == 0) {
-            printf("No commands in history.\n");
-        }
-        return;
-    }
-
-    //nguoc lai thi giai phong lenh cu
-    freeArgs(args, *argv);
-    *argv = 0;
-    *hasAmp = 0;
-    // thuc hien tach cac thanh phan duoc ngan bang dau cach va
-    // dua vao mang args
-    char *ptr = strtok(userCommand, delimiter);
-    while (ptr != NULL) {
-        if (ptr[0] == '&') {
-            *hasAmp = 1;
-            ptr = strtok(NULL, delimiter);
-            continue;
-        }
-        *argv += 1;
-        args[*argv - 1] = strdup(ptr);
-        ptr = strtok(NULL, delimiter);
-    }
-    // gan phan tu cuoi bang null de execvp biet lenh da ket thuc
-    args[*argv] = NULL;
+	tmp = _strdup(cmd_line);
+	token = strtok(tmp, strtok_delim);
+	while (token != NULL)
+		token = strtok(NULL, strtok_delim), i++;
+	free(tmp);
+	if (i != 0)
+	{
+		token_array = _calloc((i + 1), (sizeof(char *)));
+		if (token_array == NULL)
+			return ('\0');
+		token = strtok(cmd_line, strtok_delim);
+		while (token != NULL)
+		{
+			token_array[j] = _calloc((_strlen(token) + 1), sizeof(char));
+			if (token_array[j] == NULL)
+			{
+				while (k < j)
+					free(token_array[k]), k++;
+				free(token_array);
+			}
+			_strncpy(token_array[j], token, _strlen(token) + 1);
+			token = strtok(NULL, strtok_delim), j++;
+		}
+		token_array[j] = NULL;
+		if (_strcmp(token_array[0], envi) == 0 ||
+		 _strcmp(token_array[0], "printenv") == 0)
+			_env();
+		if (_strcmp(token_array[0], exit) == 0)
+			a_exit(token_array, i, cmd_line, exit_status);
+		exit_status = _exec(token_array, i, cmd_line, count, argv);
+		while (l < i)
+			free(token_array[l]), l++;
+		free(token_array);
+	}
+	return (exit_status);
 }
 
-int main(void) {
-    char *args[MAXLINE / 2 + 1]; /* command line arguments */
-    int runFlag = 1;
-    pid_t pid;
-    int hasAmp = 0;
-    int argv = 0;
-    int usingPipe = 0;
-    while (runFlag) {
-        // Reset Variables
-        usingPipe = 0;
-        /////////////////
-        printf("osh>");
-        fflush(stdout);
-        readCommandFromUser(args, &hasAmp, &argv);
-        pid = fork();
-        if (pid == 0) {
-            if (argv == 0) {
-                continue;
-            } else {
-                int redirectCase = 0;
-                int file;
-                // duyet de kiem tra xem mang args co chua "<", ">", hay "|" hay khong.
-                for (int i = 1; i <= argv - 1; i++) {
-                    // next args will be file name.
-                    if (strcmp(args[i], "<") == 0) {
-                        // case input from file
-                        file = open(args[i + 1], O_RDONLY);
-                        if (file == -1 || args[i+1]  == NULL) {
-                            printf("Invalid Command!\n");
-                            exit(1);
-                        }
-                        dup2(file, STDIN_FILENO);
-                        args[i] = NULL;
-                        args[i + 1] = NULL;
-                        redirectCase = 1;
-                        break;
-                    } else if (strcmp(args[i], ">") == 0) {
-                        //case output from file
-                        file = open(args[i + 1], O_WRONLY | O_CREAT, 0644);
-                        if (file == -1 || args[i+1]  == NULL) {
-                            printf("Invalid Command!\n");
-                            exit(1);
-                        }
-                        dup2(file, STDOUT_FILENO);
-                        args[i] = NULL;
-                        args[i + 1] = NULL;
-                        redirectCase = 2;
-                        break;
+/**
+ * _exec - Creates a child processs to start a new programm.
+ * @cmd_list: Array of strings, each string is an agrument
+ * for the programm to execute.
+ * @i: number of arguments the user typed.
+ * @count: line counter
+ * @argv: argument vector
+ * @cmd_line: Command line passed to the function.
+ * Return: 0 if success, 1 if failed.
+ */
 
-                        // case pipe
-                    } else if (strcmp(args[i], "|") == 0) {
-                        usingPipe = 1;
+int _exec(char **cmd_list, int i, char *cmd_line, int count, char **argv)
+{
+	pid_t childpid;
+	int status, exit_status = 0;
+	struct stat st;
+	char *directory, *not_command = {"it isn't a command"};
 
-                        int fd1[2];
-
-                        if (pipe(fd1) == -1) {
-                            fprintf(stderr, "Pipe Failed\n");
-                            return 1;
-                        }
-                        // tach 2 command, noi 1 dau pipe vao stdout chay command 1 lay kq
-                        // noi pipe vao stdin, chay command 2
-                        char *firstCommand[i + 1];
-                        char *secondCommand[argv - i - 1 + 1];
-                        for (int j = 0; j < i; j++) {
-                            firstCommand[j] = args[j];
-                        }
-                        firstCommand[i] = NULL;
-                        for (int j = 0; j < argv - i - 1; j++) {
-                            secondCommand[j] = args[j + i + 1];
-
-                        }
-                        secondCommand[argv - i - 1] = NULL;
-
-                        int pid_pipe = fork();
-                        if (pid_pipe > 0) {
-                            wait(NULL);
-                            close(fd1[1]);
-                            dup2(fd1[0], STDIN_FILENO);
-                            close(fd1[0]);
-                            if (execvp(secondCommand[0], secondCommand) == -1) {
-                                printf("Invalid Command!\n");
-                                return 1;
-                            }
-
-                        } else if (pid_pipe == 0) {
-
-                            close(fd1[0]);
-                            dup2(fd1[1], STDOUT_FILENO);
-                            close(fd1[1]);
-                            if (execvp(firstCommand[0], firstCommand) == -1) {
-                                printf("Invalid Command!\n");
-                                return 1;
-                            }
-                            exit(1);
-                        }
-                        close(fd1[0]);
-                        close(fd1[1]);
-                        break;
-                    }
-                }
-
-                //case arguments dont have redirect
-                if (usingPipe == 0) {
-                    if (execvp(args[0], args) == -1) {
-                        printf("Invalid Command!\n");
-                        return 1;
-                    }
-                }
-                if (redirectCase == 1) {
-                    close(STDIN_FILENO);
-
-                } else if (redirectCase == 2) {
-                    close(STDOUT_FILENO);
-                }
-                close(file);
-            }
-            exit(1);
-        } else if (pid > 0) {
-            if (hasAmp == 0) wait(NULL);
-        } else {
-            printf("Error fork!!");
-        }
-    }
+	switch (childpid = fork())
+	{
+	case -1:
+		perror("fork error");
+		return (1);
+	case 0:
+		if (stat(cmd_list[0], &st) == 0 && st.st_mode & S_IXUSR)
+		{
+			if (execve(cmd_list[0], cmd_list, environ) == -1)
+				perror("$ Error"), exit(exit_status);
+			else
+				exit(EXIT_SUCCESS);
+		}
+		else
+		{
+			directory = _path(cmd_list[0]);
+			if (_strcmp(directory, not_command) == 0)
+			{
+				command_not_found(i, cmd_list, count, argv), free(cmd_line);
+				exit(EXIT_FAILURE);
+			}
+			else
+			{
+				if (execve(directory, cmd_list, environ) == -1)
+					free(directory), perror("$ Error"), exit(exit_status);
+				else
+					exit(EXIT_SUCCESS);
+			}
+		}
+	default:
+		wait(&status);
+		if (WIFEXITED(status))
+			exit_status = WEXITSTATUS(status);
+	}
+	return (exit_status);
 }
+
+/**
+ * _path - Returns all the directories from PATH.
+ * @command: The first argument the user typed.
+ * Return: Directories from PATH.
+ */
+
+char *_path(char *command)
+{
+	int i = 0;
+	char var[] = "PATH", *path, *token, *env, *dir_temp;
+
+	while (environ[i])
+	{
+		env = _strdup(environ[i]);
+		token = strtok(env, "=");
+		if (_strcmp(token, var) == 0)
+		{
+			token = strtok(NULL, "=");
+			dir_temp = _strdup(token);
+			path = directory(dir_temp, command);
+			free(dir_temp);
+		}
+		free(env);
+		i++;
+	}
+	return (path);
+}
+
+/**
+ * directory - Checks if the command typed by User is in fact a command.
+ * @temporal_dir: string that contains the temporal directory.
+ * @command: First command typed by user.
+ * Return: The path if the command exists, not_command if it doesnt.
+ */
+
+char *directory(char *temporal_dir, char *command)
+{
+	char *path, *token, slash[] = {'/'}, flag = 0;
+	char *not_command = {"it isn't a command"};
+	struct stat st;
+
+	token = strtok(temporal_dir, ":");
+	while (token != NULL)
+	{
+		/*path = malloc(_strlen(token) + 1 + _strlen(command) + 1);*/
+		path = _calloc(_strlen(token) + _strlen(command) + 2, sizeof(char));
+		_strcpy(path, token);
+		_strcat(path, slash);
+		_strcat(path, command);
+		if (stat(path, &st) == 0 && st.st_mode & S_IXUSR)
+		{
+			flag++;
+			break;
+		}
+		token = strtok(NULL, ":");
+		free(path);
+	}
+	if (flag == 1)
+		return (path);
+	else
+		return (not_command);
+}
+
